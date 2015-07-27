@@ -8,6 +8,13 @@ require 'user_config'
 require 'pathname'
 require 'kyu'
 
+def convopt(options)
+	o = {}
+	for key in options.keys
+		o[key.to_sym] = options[key]
+	end
+	return o
+end
 class CLI < Thor
 
 	option :consumer_key, :default => false, :aliases => "-k"
@@ -16,35 +23,30 @@ class CLI < Thor
 	option :oauth_token_secret, :default => false, :aliases => "-S"
 	desc "setup", "Sets up your authentication."
 	def setup
-		if not options[:consumer_key] or not options[:consumer_secret]
+		o = convopt(options)
+		if not o[:consumer_key] or not o[:consumer_secret]
 			puts "Visit https://www.tumblr.com/oauth/register and register an application."
 			puts "For 'Default callback URL', enter /"
 			Launchy.open('https://www.tumblr.com/oauth/register') if agree('Open link [yes/no]')
-			options[:consumer_key] = ask('Enter OAuth Consumer Key: ') unless options[:consumer_key]
-			options[:consumer_secret] = ask('Enter Secret Key: ') unless options[:consumer_secret]
+			o[:consumer_key] = ask('Enter OAuth Consumer Key: ') unless o[:consumer_key]
+			o[:consumer_secret] = ask('Enter Secret Key: ') unless o[:consumer_secret]
 		end
-		if not options[:oauth_token_secret] or not options[:oauth_token]
-			exploreAPI = "https://api.tumblr.com/console/auth?consumer_key=#{options[:consumer_key]}&consumer_secret=#{options[:consumer_secret]}"
+		if not o[:oauth_token_secret] or not o[:oauth_token]
+			exploreAPI = "https://api.tumblr.com/console/auth?consumer_key=#{o[:consumer_key]}&consumer_secret=#{o[:consumer_secret]}"
 			puts "Now, visit #{exploreAPI} and click the 'Allow' button."
 			Launchy.open(exploreAPI) if agree('Open link [yes/no]')
 			puts "After accepting, you should be redirected to https://api.tumblr.com/console/calls/user/info."
 			puts "Click the Ruby tab."
-			options[:oauth_token] = ask("Enter OAuth Token (in quotes after ':oauth_token => '): ") unless options[:oauth_token]
-			options[:oauth_token_secret] = ask("Enter OAuth Token Secret (in quotes after ':oauth_token_secret => '): ") unless options[:oauth_token_secret]
+			o[:oauth_token] = ask("Enter OAuth Token (in quotes after ':oauth_token => '): ") unless o[:oauth_token]
+			o[:oauth_token_secret] = ask("Enter OAuth Token Secret (in quotes after ':oauth_token_secret => '): ") unless o[:oauth_token_secret]
 		end
-		Kyu.setup(options[:consumer_key], options[:consumer_secret], options[:oauth_token], options[:oauth_token_secret])
+		Kyu.setup(o[:consumer_key], o[:consumer_secret], o[:oauth_token], o[:oauth_token_secret])
 		puts "All set up!"
 	end
 
 	desc "test", "Tests your authentication."
 	def test
-		kyuc = UserConfig.new('.kyuc')
-		client = Tumblr::Client.new({
-			:consumer_key => kyuc['login.yaml']['consumer_key'],
-			:consumer_secret => kyuc['login.yaml']['consumer_secret'],
-			:oauth_token => kyuc['login.yaml']['oauth_token'],
-			:oauth_token_secret => kyuc['login.yaml']['oauth_token_secret']
-		})
+		client = Kyu.client
 		ci = client.info
 		if ci.has_key?('user')
 			puts "Successfully connected with #{ci['user']['name']}."
@@ -53,50 +55,67 @@ class CLI < Thor
 		end
 	end
 
-	desc "init [where]", "Initializes folder as a queue repository."
-	def init(where = ".")
-		Kyu.init(where)
-	end
-
-	desc "delete [where]", "Delete the Kyu info."
-	def delete(where = ".")
-		Kyu.delete(where)
-	end
-
 	option :all, :default => false, :aliases => "-a", :type => :boolean
-	desc "commit [what]", "Commit a file to be queued."
-	def commit(what = false)
-		what = Dir['*'].select { |f| !File.directory?(f) } if options[:all]
-		Kyu.commit what
-	end
-
-	option :all, :default => false, :aliases => "-a", :type => :boolean
-	desc "uncommit [what]", "Uncommit a file to be queued."
-	def uncommit(what = false)
-		what = Dir['*'].select { |f| !File.directory?(f) } if options[:all]
-		Kyu.uncommit what
-	end
-
-	desc "list", "Lists all committed files"
-	def list
-		if Kyu.kyu?
-			kyu = Kyu.config
-			for file in kyu['details.yaml']['committed']
-				puts file
-			end
+	option :quiet, :default => false, :aliases => "-q", :type => :boolean
+	option :file, :default => "", :aliases => "-f", :type => :array
+	desc "add [what]", "Add a file to be queued."
+	def add(what = false)
+		if options[:all]
+			glob = Dir['*']
+		else
+			glob = options[:file]
+		end
+		selection = glob.select { |f| !File.directory?(f) }.map { |f| File.absolute_path(f) }
+		if options[:quiet]
+			Kyu.add selection
+		else
+			Kyu.add selection, :verbose => true
 		end
 	end
 
+	option :all, :default => false, :aliases => "-a", :type => :boolean
+	option :quiet, :default => false, :aliases => "-q", :type => :boolean
+	option :file, :default => "", :aliases => "-f", :type => :array
+	desc "remove [what]", "Remove a file to be queued."
+	def remove
+		if options[:all]
+			glob = Dir['*']
+		else
+			glob = options[:file]
+		end
+		selection = glob.select { |f| !File.directory?(f) }.map { |f| File.absolute_path(f) }
+		if options[:quiet]
+			Kyu.remove selection
+		else
+			Kyu.remove selection, :verbose => true
+		end
+	end
+
+	desc "list", "Lists all added files"
+	def list
+		for file in Kyu.list
+			puts file
+		end
+	end
+
+	desc "clean", "Removes all files to be queued"
+	def clean
+		Kyu.clean
+	end
+
 	option :tags, :type => :array, :aliases => "-t"
+	option :quiet, :default => false, :aliases => "-q", :type => :boolean
 	desc "queue", "Enqueues items"
 	def queue
-		o = {}
+		o = {
+			:verbose => (not options[:quiet])
+		}
 		for opt in ["tags"]
 			if options.has_key? opt
 				o[opt.to_sym] = options[opt]
 			end
 		end
-		Kyu.queue o
+		Kyu.queue
 	end
 end
 

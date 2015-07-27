@@ -4,63 +4,52 @@ require 'pathname'
 require 'mimemagic'
 
 module Kyu
+	SUPPORTED = ['image']
+	COMMITTED = 'added.yaml'
+	LOGIN = 'login.yaml'
 	class << self
-		SUPPORTED = ['image']
-		def init(where = ".")
-			unless kyu?(where)
-				kyu = config
-				kyu['details.yaml']['committed'] = []
-				kyu['details.yaml'].save
-				puts "Created .kyu/"
-				puts "Created .kyu/details.yaml"
-			end
-		end
-		def delete(where = ".")
-			kyu = directory where
-			if kyu?(where)
-				kyu.rmtree
-				puts "Delete .kyu/"
-			else
-				error "Couldn't find .kyu"
-			end
+		def init
+			kyuc = UserConfig.new('.kyuc')
+			kyuc[LOGIN].save unless kyuc.exist? LOGIN
+			kyuc[COMMITTED]['committed'] = [] unless kyuc.exist? COMMITTED
+			kyuc[COMMITTED].save unless kyuc.exist? COMMITTED
 		end
 		def setup(consumer_key, consumer_secret, oauth_token, oauth_token_secret)
+			init unless kyu?
 			kyuc = UserConfig.new('.kyuc')
-			kyuc['login.yaml']['consumer_key'] = consumer_key
-			kyuc['login.yaml']['consumer_secret'] = consumer_secret
-			kyuc['login.yaml']['oauth_token'] = oauth_token
-			kyuc['login.yaml']['oauth_token_secret'] = oauth_token_secret
-			kyuc.save
+			kyuc[LOGIN]['consumer_key'] = consumer_key
+			kyuc[LOGIN]['consumer_secret'] = consumer_secret
+			kyuc[LOGIN]['oauth_token'] = oauth_token
+			kyuc[LOGIN]['oauth_token_secret'] = oauth_token_secret
+			kyuc[LOGIN].save
 		end
 		def client
 			kyuc = UserConfig.new('.kyuc')
-			if kyuc.exist? 'login.yaml'
+			if kyuc.exist? LOGIN
 				return Tumblr::Client.new({
-					:consumer_key => kyuc['login.yaml']['consumer_key'],
-					:consumer_secret => kyuc['login.yaml']['consumer_secret'],
-					:oauth_token => kyuc['login.yaml']['oauth_token'],
-					:oauth_token_secret => kyuc['login.yaml']['oauth_token_secret']
+					:consumer_key => kyuc[LOGIN]['consumer_key'],
+					:consumer_secret => kyuc[LOGIN]['consumer_secret'],
+					:oauth_token => kyuc[LOGIN]['oauth_token'],
+					:oauth_token_secret => kyuc[LOGIN]['oauth_token_secret']
 				})
 			else
 				raise "No login information for tumblr"
 			end
 		end
-		def config(where = ".")
-			return UserConfig.new('.kyu', :home => where)
+		def config
+			return UserConfig.new('.kyuc')
 		end
-		def directory(where = ".")
-			return Pathname.new(where) + ".kyu"
+		def kyu?
+			kyuc = config
+			return (kyuc.exist?(LOGIN) and kyuc.exist?(COMMITTED))
 		end
-		def kyu?(where = ".")
-			return directory(where).directory?
-		end
-		def cleanupCommits
-			kyu = config
+		def cleanupCommits(options = {:verbose => false})
+			kyuc = config
 			unc = []
-			for file in kyu['details.yaml']['committed']
+			for file in kyuc[COMMITTED]['committed']
 				unc << file unless File.exist?(file) and File.file?(file)
 			end
-			uncommit unc
+			remove unc, options
 		end
 		##
 		# Used to output a red string to the terminal.
@@ -88,45 +77,56 @@ module Kyu
 		def warning(msg)
 			puts "#{yellow("Warning:")} #{msg}"
 		end
-		def commit(what)
-			unless kyu?
-				init
-			end
-			kyu = config
+		def add(what, options = {:verbose => false})
+			init unless kyu?
+			kyuc = config
 			if what.class == Array
 				for file in what
-					if file and not kyu['details.yaml']['committed'].include?(file)
+					if file and not kyuc[COMMITTED]['committed'].include?(file)
 						if File.exists?(file) and File.file?(file)
 							mime = MimeMagic.by_magic(File.open(file)) || MimeMagic.by_path(file)
 							if mime != nil and SUPPORTED.include?(mime.mediatype)
-								kyu['details.yaml']['committed'] << file
-								puts "Committed #{file}"
+								kyuc[COMMITTED]['committed'] << file
+								puts "Added #{file}" if options[:verbose]
 							else
-								warning("File \"#{file}\" is not valid.")
+								warning("File \"#{file}\" is not valid.") if options[:verbose]
 							end
 						else
-							warning("File \"#{file}\" is not valid.")
+							warning("File \"#{file}\" is not valid.") if options[:verbose]
 						end
 					end
 				end
-				kyu['details.yaml'].save
+				kyuc[COMMITTED].save
 			else
-				commit [what]
+				add [what], options
 			end
 		end
-		def uncommit(what)
+		def list
 			if kyu?
-				kyu = config
+				kyuc = config
+				return kyuc[COMMITTED]['committed']
+			else
+				return []
+			end
+		end
+		def clean
+			kyuc = config
+			kyuc[COMMITTED]['committed'] = []
+			kyuc[COMMITTED].save
+		end
+		def remove(what, options = {:verbose => false})
+			if kyu?
+				kyuc = config
 				if what.class == Array
 					copy = []
-					for file in kyu['details.yaml']['committed']
+					for file in kyuc[COMMITTED]['committed']
 						copy << file unless what.include?(file)
-						puts "Uncommitted #{file}" if what.include?(file)
+						puts "Removed #{file}" if what.include?(file) and options[:verbose]
 					end
-					kyu['details.yaml']['committed'] = copy
-					kyu['details.yaml'].save
+					kyuc[COMMITTED]['committed'] = copy
+					kyuc[COMMITTED].save
 				else
-					uncommit [what]
+					remove [what], options
 				end
 			end
 		end
@@ -136,24 +136,26 @@ module Kyu
 			if kyu?
 				cleanupCommits
 				kyu = config
-				for file in kyu['details.yaml']['committed']
+				for file in kyu[COMMITTED]['committed']
 					mime = MimeMagic.by_magic(File.open(file)) || MimeMagic.by_path(file)
 					if mime != nil and SUPPORTED.include?(mime.mediatype)
 						case mime.mediatype
-						when 'image'
-							req = tumblr.photo("#{client.info['user']['name']}.tumblr.com", ({:data => file}).merge(options))
+							when 'image'
+								req = tumblr.photo("#{client.info['user']['name']}.tumblr.com", ({:data => file}).merge(options))
 						end
 						if req.has_key? 'id' and not req.has_key? 'status'
-							puts "#{green('OK:')} #{file}"
-							uncommit file
+							puts "#{green('OK:')} #{file}" if options[:verbose]
+							remove file
 						else
-							puts "#{red("#{req['status']}:")} #{file}"
-							for error in req['errors']
-								puts "\t#{error}"
+							if options[:verbose]
+								puts "#{red("#{req['status']}:")} #{file}"
+								for error in req['errors']
+									puts "\t#{error}"
+								end
 							end
 						end
 					else
-						warning("File \"#{file}\" is not valid.")
+						warning("File \"#{file}\" is not valid.") if options[:verbose]
 					end
 				end
 			end
