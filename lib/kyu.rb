@@ -133,6 +133,8 @@ module Kyu
 		def queue(options)
 			tumblr = client
 			options[:state] = 'queue'
+			passed = options.clone
+			passed.tap { |hs| hs.delete(:verbose) }
 			if kyu?
 				cleanupCommits
 				kyu = config
@@ -141,7 +143,7 @@ module Kyu
 					if mime != nil and SUPPORTED.include?(mime.mediatype)
 						case mime.mediatype
 							when 'image'
-								req = tumblr.photo("#{client.info['user']['name']}.tumblr.com", ({:data => file}).merge(options))
+								req = tumblr.photo("#{client.info['user']['name']}.tumblr.com", ({:data => file}).merge(passed))
 						end
 						if req.has_key? 'id' and not req.has_key? 'status'
 							puts "#{green('OK:')} #{file}" if options[:verbose]

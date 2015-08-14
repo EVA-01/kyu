@@ -115,7 +115,7 @@ class CLI < Thor
 				o[opt.to_sym] = options[opt]
 			end
 		end
-		Kyu.queue
+		Kyu.queue o
 	end
 end
 
